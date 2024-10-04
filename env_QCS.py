@@ -4,8 +4,11 @@ from collections import deque
 import copy
 import cirq
 from config import CONFIG
-import MCTS
-from network import prepare_input as pi
+import qiskit
+from qiskit import QuantumCircuit
+from qiskit.quantum_info import Operator
+
+
 
 #全局变量
 ket0 = np.array([[1], [0]]) # |0>
@@ -33,12 +36,30 @@ CNOT = np.array([[1, 0, 0, 0],
                  [0, 1, 0, 0],
                  [0, 0, 0, 1],
                  [0, 0, 1, 0]])
-gate_Set = {"H": H, "S": S, "S_d": S_dagger, "T": T, "T_d": T_dagger, "C": CNOT, }
+gate_Set = {"H": H, "S": S, "S_d": S_dagger, "T": T, "T_d": T_dagger, "C": CNOT}
 
+def normalize_value(v):
+    return 2 * ((v + 6) / 5) - 1
+
+def unnormalize_value(v_norm):
+    return ((v_norm + 1) / 2) * 5 - 6
+
+def values_cal(rewards, discount = CONFIG["discount_rl"]):
+    # 初始化累计值为0
+    cumulative_value = 0
+    # 初始化用于存储计算结果的列表
+    values = []
+    # 从列表末尾开始向前迭代
+    for reward in reversed(rewards):
+        cumulative_value = reward + cumulative_value * discount
+        values.append(cumulative_value)
+    # 翻转values列表，以便按原列表顺序显示累计值
+    values.reverse()
+    return values
 
 
 #生成电路初始状态
-def get_state_initial(n_qubit):
+def get_state_initial(n_qubit): ## np.eyes(n_qubit)
     I = np.array([[1, 0], [0, 1]])
     for ith in range(n_qubit):
         if ith == 0:
@@ -48,7 +69,7 @@ def get_state_initial(n_qubit):
     return state
 
 #生成电路的合法操作 I⊗U⊗I
-def get_gate_layer(n_qubit, gate, index): #2, "H", [1]
+def get_gate_layer(n_qubit, gate, index): #2, "H", [1]  ##直接用qiskit
     I = np.array([[1, 0], [0, 1]])
     I_list = ["I" for _ in range(1,n_qubit+1)]
     gate_Set = {"I" : np.array([[1, 0], [0, 1]]),
@@ -168,30 +189,65 @@ def gen_dict_id2actions(id_list, num_gate_inset, num_qubit, dict_actions2id):
 
 
 class circuit(object):
-    def __init__(self, n_qubit, gate_Set, target_matrix, theta):
+    def __init__(self, n_qubit, target_matrix, theta = CONFIG["theta"], gate_Set = CONFIG["gateset_env"]):
         self.n_qubit = n_qubit
-        self.state = None
+        self.circuit = QuantumCircuit(self.n_qubit)
+        self.state = None # np.arrage
         self.gate_Set = gate_Set
-        self.gate_list = []
-        self.target = target_matrix
-        self.theta = theta
-        self.all_actions_id = []
-        self.dict_actions2id = index2gate(self.gate_Set)
-        self.dict_id2actions = {}
+        self.gate_inserted = []
+        self.target = np.array(target_matrix)
+        self.theta = theta  ## 判别生成矩阵是否达到target
+
+        # self.all_actions_id = []
+        # self.dict_actions2id = index2gate(self.gate_Set)
+        # self.dict_id2actions = {}
+        # self.num_action_onebit = 0
+
 
 
     def init_circuit(self):
-        self.state = get_state_initial(self.n_qubit)
-        num_actions = len(self.gate_Set) + self.n_qubit -2
-        self.all_actions_id = list(range(num_actions*self.n_qubit))
-        self.dict_id2actions = gen_dict_id2actions(self.all_actions_id, len(self.gate_Set), self.n_qubit, self.dict_actions2id)
+        circuit_unitary = Operator(self.circuit)
+        self.state = circuit_unitary.data
 
+        # self.num_action_onebit = len(self.gate_Set) + self.n_qubit - 1 # for 多比特
+        # self.all_actions_id = np.arange(self.num_action_onebit * self.n_qubit)
+        # self.dict_id2actions = gen_dict_id2actions(self.all_actions_id, len(self.gate_Set), self.n_qubit, self.dict_actions2id)
+
+
+    # def get_action(self, move):
+    #     move += 1   # move从0开始
+    #     gate = move % self.num_action_onebit
+    #     if gate > len(self.gate_Set):
+    #         gate = "C"
+    #
+    #     else:
+    #         gate = self.gate_Set[gate]
+    #         bit = move / self.num_action_onebit
+    #
+    #
+    #     action = [gate, bit]
+    #
+    #     return action
 
 
     def insert_gate(self, gate, index):
-        gate_layer = get_gate_layer(self.n_qubit, gate, index)
-        self.state = np.dot(gate_layer, self.state)
-        self.gate_list.append([gate, index])
+        if gate == "H":
+            self.circuit.h(index)
+        elif gate == "S":
+            self.circuit.s(index)
+        elif gate == "S_d":
+            self.circuit.sdg(index)
+        elif gate == "T":
+            self.circuit.t(index)
+        elif gate == "T_d":
+            self.circuit.tdg(index)
+        elif gate == "C":
+            self.circuit.cx(index[0], index[1])
+
+        ## 更新状态
+        circuit_unitary = Operator(self.circuit)
+        self.state = circuit_unitary.data
+
 
 
     # def get_all_actions(self):
@@ -199,93 +255,105 @@ class circuit(object):
     #     return num_action
 
 
+
     def is_target(self):
         is_target = False
-        product_HS = cirq.hilbert_schmidt_inner_product(self.target, self.state)
-        # print("inner_product ", product_HS)
-        # print("theta", self.theta)
-        if np.abs(1 - product_HS) <= self.theta:
+        C_hs = 1 - np.abs(cirq.hilbert_schmidt_inner_product(self.state, self.target)) ** 2 / (4 ** self.n_qubit)
+        if C_hs <= self.theta:
             is_target = True
-        return is_target, product_HS
+        return is_target
 
 
 
 
 class Sys2target(object):
-    def __init__(self, n_qubit, gate_Set, matrix_tar ):
+    def __init__(self, n_qubit, gate_Set, matrix_tar):
         self.target = matrix_tar
         self.n_qubit = n_qubit
-        self.gate_Set = gate_Set
-        self.theta = CONFIG["theta"]
-        self.actions_1bit = len(self.gate_Set) + self.n_qubit -2
         self.max_step = CONFIG["maxstep"]
-        self.circuit = circuit(self.n_qubit, self.gate_Set, self.target,self.theta)
-        self.index_gate = index2gate(self.gate_Set)
-        self.num_action = self.actions_1bit * self.n_qubit
+        self.circuit = circuit(self.n_qubit, self.target)
 
-    def move_to_action(self, move):
-        move  += 1
-        n = self.actions_1bit
-        bit =int(move // n)
-        gate_index = int(move % n)
-        if gate_index < len(self.gate_Set):
-            gate = self.index_gate[gate_index]
-        else:
-            gate = "C"
-            con = bit - len(self.gate_Set) + 1
-            bit = [con ,bit]
-        bit = [bit]
+        # self.theta = CONFIG["theta"]
+        # self.actions_1bit = len(self.gate_Set) + self.n_qubit -2
+        # self.gate_Set = gate_Set
+        # self.index_gate = index2gate(self.gate_Set)
+        # self.num_action = self.actions_1bit * self.n_qubit
 
-        return gate, bit
+    # def move_to_action(self, move):
+    #     move  += 1
+    #     n = self.actions_1bit
+    #     bit =int(move // n)
+    #     gate_index = int(move % n)
+    #     if gate_index < len(self.gate_Set):
+    #         gate = self.index_gate[gate_index]
+    #     else:
+    #         gate = "C"
+    #         con = bit - len(self.gate_Set) + 1
+    #         bit = [con ,bit]
+    #     bit = [bit]
+    #
+    #     return gate, bit
 
 
-    def reward(self, product_HS): # Hilbert Schmidt inner product
-        C_HS = 1 - (1 / (4 * self.n_qubit)) * np.abs(product_HS) ** 2
-        return C_HS
+    # def reward(self, product_HS): # Hilbert Schmidt inner product
+    #     C_HS = 1 - (1 / (4 ** self.n_qubit)) * np.abs(product_HS) ** 2
+    #     return C_HS
 
 
     def self_play(self, player_MCTS, temp = 1e-3):
-        # 初始化电路
+        # input a target unitary matrix
+        # output the sequence of gate
+
         self.circuit.init_circuit()
-        states, moves, probs_moves, rewards = [],[],[],[]
+        states, moves, probs_moves, rewards, targets = [],[],[],[],[]
         #在达到最大步数时停止
-        print("maxstep", self.max_step)
+        # print("maxstep", self.max_step)
+        is_target = False
         for _ in range(self.max_step):
+            targets.append(self.target)
 
             move_mcts, probs_move_mcts = player_MCTS.get_action(self.circuit, self.num_action,temp = temp, return_prob = 1)
-            print("move_mcts, probs_move_mcts", move_mcts, probs_move_mcts)
+            # print("move_mcts, probs_move_mcts", move_mcts, probs_move_mcts)
             #保存数据
             states.append(self.circuit.state)
             moves.append(move_mcts)
             probs_moves.append(probs_move_mcts)
 
+            # 将插入的门记录起来
+            self.circuit.gate_inserted.append(move_mcts)
             # id turn into gate
-            action = self.circuit.dict_id2actions.get(move_mcts)
-            print("action ", action)
+
+            action = self.circuit.gate_Set[move_mcts]
+            # print("action ", action)
             # 执行插入一个门
             self.circuit.insert_gate(action[0],action[1]) # move_mcts -> gate, index
 
+            is_target = self.circuit.is_target()
+
+
+            if is_target:
+                rewards.append(-1)
+                player_MCTS.reset_player()
+                values = values_cal(rewards) #奖励累加成为value
+                return is_target, zip(states, moves, probs_moves, values)
+
             # Hilbert Schmidt inner product
 
-            is_target,product_HS = self.circuit.is_target()
-            #计算奖励，保存奖励
-            reward_current = self.reward(product_HS)
-            # reward_accumulated += reward_current
-            rewards.append(reward_current)
+            # is_target,product_HS = self.circuit.is_target()
+            # #计算奖励，保存奖励
+            # reward_current = self.reward(product_HS)
+            # # reward_accumulated += reward_current
+            rewards.append(-1)  # rewards肯定是不对的 要的是rewards的累加
 
-            #判断是否合成目标电路
-            if is_target:
-                player_MCTS.reset_player()
-                return is_target, zip(states, moves, probs_moves, rewards)
+        rewards[-1] = -2
+        values = values_cal(rewards)
+        values = normalize_value(values) # normalize between [-1, 1]
+        return is_target, zip(states, moves, probs_moves, values)
 
-        return is_target, zip(states, moves, probs_moves, rewards)
+    # def get_observation(self):
+    #     observation = np.dot(self.circuit.state, self.target)
+    #     return observation
 
-    def get_observation(self):
-        observation = np.dot(self.circuit.state, self.target)
-        return observation
-#可视化
-def visualize_circuit(state):
-    return None
 
 
 
