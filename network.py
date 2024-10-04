@@ -22,105 +22,128 @@ def get_observation(circuit):
     # print("circuit.state, type", circuit.state, type(circuit.state))
     observation = np.dot(circuit.state, circuit.target)
     return observation
+
+def action_filter(action_pre, acts, probs, set_gate): #将一些不合理的action的概率变为0
+    # print("action_filter:", set_gate)
+
+    gate_pre = set_gate[action_pre]
+    # print("action_filter: gate: {}, bite: {}".format(gate_pre[0], gate_pre[1]))
+    if gate_pre[0] == "C" or gate_pre[0] == "T" or gate_pre[0] == "T_d":
+        probs[action_pre] = 0
+    if gate_pre[0] == "T":
+        action_key1 = [key for key, value in set_gate.items() if value[0] == 'T_d'and value[1] == gate_pre[1] ]
+        # print("action_key:", action_key1)
+        probs[action_key1[0]] = 0
+        action_key2 = [key for key, value in set_gate.items() if value[0] == 'S_d'and value[1] == gate_pre[1] ]
+        # print("action_key:", action_key2)
+        probs[action_key2[0]] = 0
+    elif gate_pre[0] == "T_d":
+        action_key1 = [key for key, value in set_gate.items() if value[0] == 'T' and value[1] == gate_pre[1]]
+        # print("action_key:", action_key)
+        probs[action_key1[0]] = 0
+        action_key2 = [key for key, value in set_gate.items() if value[0] == 'S' and value[1] == gate_pre[1]]
+        # print("action_key:", action_key)
+        probs[action_key2[0]] = 0
+    elif gate_pre[0] == "S":
+        action_key1 = [key for key, value in set_gate.items() if value[0] == 'S_d' and value[1] == gate_pre[1]]
+        # print("action_key:", action_key)
+        probs[action_key1[0]] = 0
+        action_key2 = [key for key, value in set_gate.items() if value[0] == 'T_d' and value[1] == gate_pre[1]]
+        # print("action_key:", action_key)
+        probs[action_key2[0]] = 0
+    elif gate_pre[0] == "S_d":
+        action_key1 = [key for key, value in set_gate.items() if value[0] == 'S' and value[1] == gate_pre[1]]
+        # print("action_key:", action_key)
+        probs[action_key1[0]] = 0
+        action_key2 = [key for key, value in set_gate.items() if value[0] == 'T' and value[1] == gate_pre[1]]
+        # print("action_key:", action_key)
+        probs[action_key2[0]] = 0
+
+        return acts, probs
+
+
+def probs_normalize(probs):
+    total = np.sum(probs)
+    probs /= total
+    return probs
+
+
 class Net(nn.Module):
-    def __init__(self, input_dim = 32, output_dim = 12):
+    def __init__(self, input_dim = CONFIG["input_dim"], output_dim = CONFIG["output_dim"]):
         super(Net, self).__init__()
         # 公共网络
-        self.layer1 = nn.Linear(input_dim, 1024)
-        self.layer1_norm = nn.LayerNorm(1024)
+        self.layer1 = nn.Linear(input_dim, 256)
         self.layer1_act = nn.ReLU()
-        self.layer2 = nn.Linear(1024, 1024)
-        self.layer2_norm = nn.LayerNorm(1024)
+        self.layer2 = nn.Linear(256, 256)
         self.layer2_act = nn.ReLU()
-        self.layer3 = nn.Linear(1024, 1024)
-        self.layer3_norm = nn.LayerNorm(1024)
+        self.layer3 = nn.Linear(256, 256)
         self.layer3_act = nn.ReLU()
-        self.layer4 = nn.Linear(1024, 1024)
-        self.layer4_norm = nn.LayerNorm(1024)
-        self.layer4_act = nn.ReLU()
-        self.layer5 = nn.Linear(1024, 1024)
-        self.layer5_norm = nn.LayerNorm(1024)
-        self.layer5_act = nn.ReLU()
 
         # 策略头
-        self.policy_layer = nn.Linear(1024, output_dim )
-        self.policy_norm = nn.LayerNorm(output_dim )
-        self.policy_act = nn.ReLU()
-        self.policy_fc = nn.Linear(output_dim , output_dim)
+        self.policy_layer = nn.Linear(256, output_dim)
+        self.policy_act = nn.Softmax(dim=-1)
 
         # 价值头
-        self.value_layer = nn.Linear(1024, 128)
-        self.value_norm = nn.LayerNorm(128)
-        self.value_act = nn.ReLU()
-        self.value_fc = nn.Linear(128, 1)
+        self.value_layer = nn.Linear(256, 1)
+        self.value_act = nn.Tanh()
 
     def forward(self, x):
         x = self.layer1(x)
-        x = self.layer1_norm(x)
         x = self.layer1_act(x)
         x = self.layer2(x)
-        x = self.layer2_norm(x)
         x = self.layer2_act(x)
         x = self.layer3(x)
-        x = self.layer3_norm(x)
         x = self.layer3_act(x)
-        x = self.layer4(x)
-        x = self.layer4_norm(x)
-        x = self.layer4_act(x)
-        x = self.layer5(x)
-        x = self.layer5_norm(x)
-        x = self.layer5_act(x)
 
         # 策略头
         policy = self.policy_layer(x)
-        policy = self.policy_norm(policy)
         policy = self.policy_act(policy)
-        policy = self.policy_fc(policy)
-        policy = F.log_softmax(policy, dim=-1)
 
         # 价值头
         value = self.value_layer(x)
-        value = self.value_norm(value)
         value = self.value_act(value)
-        value = self.value_fc(value)
-        # value = torch.tanh(value)
 
         return policy, value
 
 
-# 策略价值网络 用来训练
+
+
 class PolicyValueNet:
 
-    def __init__(self, model_file=None, use_gpu=True, device = 'cpu'):
+    def __init__(self, model_file=None, use_gpu=True, device = CONFIG["device"]):
 
             self.use_gpu = use_gpu
             self.l2_const = 2e-3  # l2 正则化
             self.device = device
             self.policy_value_net = Net().to(self.device)
-            self.optimizer = torch.optim.Adam(params=self.policy_value_net.parameters(), lr=1e-3, betas=(0.9, 0.999),
+            self.optimizer = torch.optim.Adam(params=self.policy_value_net.parameters(), lr=CONFIG["learn_rate"], betas=(0.9, 0.999),
                                               eps=1e-8, weight_decay=self.l2_const)
             if model_file:
-                self.policy_value_net.load_state_dict(torch.load(model_file))  # 加载模型参数 model_file：存储模型的地址
+                self.policy_value_net.load_state_dict(torch.load(model_file)) # 加载模型参数 model_file：存储模型的地址
+                # first_layer_weights_after = next(iter(self.policy_value_net.parameters())).detach().clone()
+                # print("Weights after loading:", first_layer_weights_after)
 
-    # 输入一个批次的状态，输出一个批次的动作概率和状态价值
+    # 输入一个批次的状态，输出一个批次的动作概率和状态价值，用在训练时候
     def policy_value(self, state_batch):
         self.policy_value_net.eval()
         # state_batch = torch.tensor(state_batch).to(self.device)
         log_act_probs, value = self.policy_value_net(state_batch)
         log_act_probs, value = log_act_probs.cpu(), value.cpu()
-        act_probs = np.exp(log_act_probs.detach().numpy())
+        act_probs = log_act_probs.detach().numpy()
         return act_probs, value.detach().numpy()
 
-    # 输入棋盘，返回每个合法动作的（动作，概率）元组列表，以及棋盘状态的分数
+    # 输入state，返回每个合法动作的（动作，概率）元组列表，以及state的value，用在预测
     def policy_value_fn(self, circuit):
         self.policy_value_net.eval()
-        # state = circuit.state
+        state_dg = circuit.state.conj().T  #V†
+        state_input = np.dot(state_dg, circuit.target) # V†U represent unbuilt part
 
         # 获取合法动作列表
-        legal_positions = circuit.all_actions_id  #action masking
-        state_input = prepare_input(get_observation(circuit))
-        state_input = np.ascontiguousarray(state_input)
+        # legal_positions = circuit.all_actions_id  #action masking
+        # state_input = prepare_input(get_observation(circuit))
+        # state_input = np.ascontiguousarray(state_input)
         # print(state_input)
+
         state_input = torch.as_tensor(state_input).to(self.device)
         # print("state input, type; in network", state_input, type(state_input))
 
@@ -128,9 +151,20 @@ class PolicyValueNet:
         with autocast(): #转换为半精度fp16
             log_act_probs, value = self.policy_value_net(state_input)  #调用前向传播函数
         log_act_probs, value = log_act_probs.cpu(), value.cpu()
-        act_probs = np.exp(log_act_probs.detach().numpy().astype('float16').flatten())
-        # 只取出合法动作
-        act_probs = zip(legal_positions, act_probs[legal_positions])  # 合法action未归一化
+        act_probs = log_act_probs.detach().numpy().astype('float16').flatten()
+
+        actions = np.arange(len(circuit.gate_Set))
+
+        if circuit.gate_inserted:
+           ## 过滤
+            gate_pre = circuit.gate_inserted[-1]
+            actions, act_probs = action_filter(gate_pre, actions,act_probs, circuit.gate_Set)
+            act_probs = probs_normalize(act_probs)  #probs normalize
+
+
+
+        act_probs = zip(actions, act_probs[actions])
+        # act_probs = zip(actions_legal, act_probs[actions_legal])  # 合法action未归一化
         # 返回动作概率，以及状态价值
         return act_probs, value.detach().numpy()
 
