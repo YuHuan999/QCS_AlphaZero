@@ -230,7 +230,7 @@ class circuit(object):
     #     return action
 
 
-    def insert_gate(self, gate, index):
+    def insert_gate(self, gate, index, move_mcts):
         if gate == "H":
             self.circuit.h(index)
         elif gate == "S":
@@ -247,6 +247,9 @@ class circuit(object):
         ## 更新状态
         circuit_unitary = Operator(self.circuit)
         self.state = circuit_unitary.data
+
+        ## 记录插入的门
+        self.gate_inserted.append(move_mcts)
 
 
 
@@ -303,7 +306,7 @@ class Sys2target(object):
     def self_play(self, player_MCTS, temp = 1e-3):
         # input a target unitary matrix
         # output the sequence of gate
-
+        num_actions = len(CONFIG["gateset_env"])
         self.circuit.init_circuit()
         states, moves, probs_moves, rewards, targets = [],[],[],[],[]
         #在达到最大步数时停止
@@ -312,7 +315,7 @@ class Sys2target(object):
         for _ in range(self.max_step):
             targets.append(self.target)
 
-            move_mcts, probs_move_mcts = player_MCTS.get_action(self.circuit, self.num_action,temp = temp, return_prob = 1)
+            move_mcts, probs_move_mcts = player_MCTS.get_action(self.circuit, num_actions,temp = temp, return_prob = 1)
             # print("move_mcts, probs_move_mcts", move_mcts, probs_move_mcts)
             #保存数据
             states.append(self.circuit.state)
@@ -320,22 +323,26 @@ class Sys2target(object):
             probs_moves.append(probs_move_mcts)
 
             # 将插入的门记录起来
-            self.circuit.gate_inserted.append(move_mcts)
+            # self.circuit.gate_inserted.append(move_mcts) #添加在insert_gate function 中
             # id turn into gate
 
             action = self.circuit.gate_Set[move_mcts]
             # print("action ", action)
             # 执行插入一个门
-            self.circuit.insert_gate(action[0],action[1]) # move_mcts -> gate, index
+            self.circuit.insert_gate(action[0],action[1], move_mcts) # move_mcts -> gate, index
 
             is_target = self.circuit.is_target()
 
 
             if is_target:
+
                 rewards.append(-1)
                 player_MCTS.reset_player()
                 values = values_cal(rewards) #奖励累加成为value
-                return is_target, zip(states, moves, probs_moves, values)
+                values = np.array(values)
+                values = normalize_value(values)
+                # print("value in reach", values)
+                return is_target, zip(states, moves, probs_moves, values, targets)
 
             # Hilbert Schmidt inner product
 
@@ -345,10 +352,15 @@ class Sys2target(object):
             # # reward_accumulated += reward_current
             rewards.append(-1)  # rewards肯定是不对的 要的是rewards的累加
 
+
+        player_MCTS.reset_player()
         rewards[-1] = -2
         values = values_cal(rewards)
+        values = np.array(values)
+        # print("values", type(values))
         values = normalize_value(values) # normalize between [-1, 1]
-        return is_target, zip(states, moves, probs_moves, values)
+        # print("value in not reach", values)
+        return is_target, zip(states, moves, probs_moves, values, targets)
 
     # def get_observation(self):
     #     observation = np.dot(self.circuit.state, self.target)

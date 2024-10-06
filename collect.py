@@ -33,14 +33,14 @@ class CollectPipeline:
         self.data_buffer = deque(maxlen=self.buffer_size)
         self.iters = 0
         self.inital_model = init_model
-        if CONFIG['use_redis']:
-            self.redis_cli = my_redis.get_redis_cli()
+        # if CONFIG['use_redis']:
+        #     self.redis_cli = my_redis.get_redis_cli()
 
         # 从主体加载模型
     def load_model(self):
             try:
                 if self.inital_model:
-                    self.policy_value_net = PolicyValueNet(self.inital_model)
+                    self.policy_value_net = PolicyValueNet(model_file=self.inital_model)
                     print('已加载最新模型')
                 else:
                     self.policy_value_net = PolicyValueNet()
@@ -62,37 +62,45 @@ class CollectPipeline:
             env = env_QCS.Sys2target(self.n_qubit, self.gate_Set, target)
             is_target, play_data = env.self_play(self.mcts_player, temp=self.temp)
             play_data = list(play_data)[:]
+            with open('output.txt', 'a') as f:
+                for i in range(len(play_data)):
+                    print("trace:{}th\ntarget:\n{}\nstate:\n{}\nact:{}\nprobs:{}\nvalue:{}\n".format(i+1, play_data[i][4], play_data[i][0], play_data[i][1], play_data[i][2], play_data[i][3] ), file=f)
+            # print("play data", play_data)
             self.episode_len = len(play_data)
 
             # 增加数据
             if os.path.exists(CONFIG['train_data_buffer_path']):
-                    while True:
-                        try:
-                            with open(CONFIG['train_data_buffer_path'], 'rb') as data_dict:
-                                data_file = pickle.load(data_dict)
-                                self.data_buffer = deque(maxlen=self.buffer_size)
-                                self.data_buffer.extend(data_file['data_buffer'])
-                                self.iters = data_file['iters']
-                                del data_file
-                                self.iters += 1
-                                self.data_buffer.extend(play_data)
-                            print('成功载入数据')
-                            break
-                        except:
-                            time.sleep(30)
+                    # while True:
+                    try:
+                        with open(CONFIG['train_data_buffer_path'], 'rb') as data_dict:
+                            print("success load")
+                            data_file = pickle.load(data_dict)
+                            self.data_buffer = deque(maxlen=self.buffer_size)
+                            self.data_buffer.extend(data_file['data_buffer'])
+                            # self.iters = data_file['iters']
+                            del data_file
+                            self.iters += 1
+                            self.data_buffer.extend(play_data)
+                    except FileNotFoundError:
+                        print("fail load")
+                        time.sleep(30)
+                        # print("sleep")
             else:
+                    print("initial trace set")
                     self.data_buffer.extend(play_data)
                     self.iters += 1
+            # print("data buffer", self.data_buffer)
             data_dict = {'data_buffer': self.data_buffer, 'iters': self.iters}
             with open(CONFIG['train_data_buffer_path'], 'wb') as data_file:
                 pickle.dump(data_dict, data_file)
+                print('成功载入数据')
 
         return self.iters
 
     def run(self):
         """执行收集数据"""
-        with open(r"C:\projects\AlphaZero+QuantumCircuits\QCS_AlphaZero\dataset\intial_sequences.txt", "r") as file:
-            initial_circuits = [line.strip() for line in file.readlines()]
+        # with open(r"C:\projects\AlphaZero+QuantumCircuits\QCS_AlphaZero\dataset\intial_sequences.txt", "r") as file:
+        initial_circuits = CONFIG["initial_sequences"]
 
         try:
             while True:
@@ -116,9 +124,9 @@ class CollectPipeline:
 
                 iters = self.collect_selfplay_data(target)
                 # iter i：第i次添加数据，episode_len：添加了几条数据
-                print('iter i: {}, episode_len: {}'.format(
-                    iters, self.episode_len))
-
+                with open('output.txt', 'a') as f:
+                    print('iter i: {}, episode_len: {}\n'.format(
+                    iters, self.episode_len), file= f)
 
         except KeyboardInterrupt:
             print('\n\rquit')

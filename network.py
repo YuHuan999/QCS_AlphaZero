@@ -28,38 +28,38 @@ def action_filter(action_pre, acts, probs, set_gate): #将一些不合理的acti
 
     gate_pre = set_gate[action_pre]
     # print("action_filter: gate: {}, bite: {}".format(gate_pre[0], gate_pre[1]))
-    if gate_pre[0] == "C" or gate_pre[0] == "T" or gate_pre[0] == "T_d":
+    if gate_pre[0] == "C" or gate_pre[0] == "H" or gate_pre[0] == "T" or gate_pre[0] == "T_d":
         probs[action_pre] = 0
     if gate_pre[0] == "T":
-        action_key1 = [key for key, value in set_gate.items() if value[0] == 'T_d'and value[1] == gate_pre[1] ]
+        # action_key1 = [key for key, value in set_gate.items() if value[0] == 'T_d'and value[1] == gate_pre[1] ]
         # print("action_key:", action_key1)
-        probs[action_key1[0]] = 0
-        action_key2 = [key for key, value in set_gate.items() if value[0] == 'S_d'and value[1] == gate_pre[1] ]
+        probs[4] = 0  #prob_T_dg = 0
+        # action_key2 = [key for key, value in set_gate.items() if value[0] == 'S_d'and value[1] == gate_pre[1] ]
         # print("action_key:", action_key2)
-        probs[action_key2[0]] = 0
+        probs[2] = 0 #prob_S_dg = 0
     elif gate_pre[0] == "T_d":
-        action_key1 = [key for key, value in set_gate.items() if value[0] == 'T' and value[1] == gate_pre[1]]
+        # action_key1 = [key for key, value in set_gate.items() if value[0] == 'T' and value[1] == gate_pre[1]]
         # print("action_key:", action_key)
-        probs[action_key1[0]] = 0
-        action_key2 = [key for key, value in set_gate.items() if value[0] == 'S' and value[1] == gate_pre[1]]
+        probs[3] = 0 #prob_T = 0
+        # action_key2 = [key for key, value in set_gate.items() if value[0] == 'S' and value[1] == gate_pre[1]]
         # print("action_key:", action_key)
-        probs[action_key2[0]] = 0
+        probs[1] = 0 #prob_S = 0
     elif gate_pre[0] == "S":
-        action_key1 = [key for key, value in set_gate.items() if value[0] == 'S_d' and value[1] == gate_pre[1]]
+        # action_key1 = [key for key, value in set_gate.items() if value[0] == 'S_d' and value[1] == gate_pre[1]]
         # print("action_key:", action_key)
-        probs[action_key1[0]] = 0
-        action_key2 = [key for key, value in set_gate.items() if value[0] == 'T_d' and value[1] == gate_pre[1]]
+        probs[2] = 0 #prob_S_dg = 0
+        # action_key2 = [key for key, value in set_gate.items() if value[0] == 'T_d' and value[1] == gate_pre[1]]
         # print("action_key:", action_key)
-        probs[action_key2[0]] = 0
+        probs[4] = 0  #prob_T_dg = 0
     elif gate_pre[0] == "S_d":
-        action_key1 = [key for key, value in set_gate.items() if value[0] == 'S' and value[1] == gate_pre[1]]
+        # action_key1 = [key for key, value in set_gate.items() if value[0] == 'S' and value[1] == gate_pre[1]]
         # print("action_key:", action_key)
-        probs[action_key1[0]] = 0
-        action_key2 = [key for key, value in set_gate.items() if value[0] == 'T' and value[1] == gate_pre[1]]
+        probs[1] = 0 #prob_S = 0
+        # action_key2 = [key for key, value in set_gate.items() if value[0] == 'T' and value[1] == gate_pre[1]]
         # print("action_key:", action_key)
-        probs[action_key2[0]] = 0
+        probs[3] = 0 #prob_T = 0
 
-        return acts, probs
+    return acts, probs
 
 
 def probs_normalize(probs):
@@ -119,6 +119,7 @@ class PolicyValueNet:
             self.optimizer = torch.optim.Adam(params=self.policy_value_net.parameters(), lr=CONFIG["learn_rate"], betas=(0.9, 0.999),
                                               eps=1e-8, weight_decay=self.l2_const)
             if model_file:
+                # print("MODEL", model_file)
                 self.policy_value_net.load_state_dict(torch.load(model_file)) # 加载模型参数 model_file：存储模型的地址
                 # first_layer_weights_after = next(iter(self.policy_value_net.parameters())).detach().clone()
                 # print("Weights after loading:", first_layer_weights_after)
@@ -145,10 +146,25 @@ class PolicyValueNet:
         # print(state_input)
 
         state_input = torch.as_tensor(state_input).to(self.device)
-        # print("state input, type; in network", state_input, type(state_input))
+        # print("state_input", state_input)
+        real_part = state_input.real  # 提取实部
+        imag_part = state_input.imag  # 提取虚部
+        # print(real_part)
+        # print(imag_part)
+        # 展平实部和虚部
+        flattened_real = real_part.flatten()
+        flattened_imag = imag_part.flatten()
+        # 连接实部和虚部
+        # print(flattened_real)
+        # print(flattened_imag)
+
+        state_input = torch.cat((flattened_real, flattened_imag), dim=0).to(torch.half)  #flatten
+        # state_batch = prepare_inputs(state_batch)
+        # state_input = torch.stack([state_input], dim=0)
 
         # 使用神经网络进行预测
         with autocast(): #转换为半精度fp16
+            # print("state_input", state_input)
             log_act_probs, value = self.policy_value_net(state_input)  #调用前向传播函数
         log_act_probs, value = log_act_probs.cpu(), value.cpu()
         act_probs = log_act_probs.detach().numpy().astype('float16').flatten()

@@ -32,7 +32,7 @@ class TreeNode(object):
 
     def get_value(self,c_puct):
         #c_puct：控制相对影响 大：倾向探索 小：倾向Q值
-        self.U = (c_puct*self.p* np.sqrt(self.parent.count_visit/(1 + self.count_visit) ) )
+        self.U = (c_puct*self.p* np.sqrt(self.parent.count_visit)/(1 + self.count_visit)  )
         return self.Q + self.U  #节点先验U和评估Q
 
 
@@ -78,10 +78,12 @@ class MCTS(object):
                 # print("is_leave")
                 break
             #贪心算法选择最大置信上界
-            action, node = node.select(self.c_puct)
+            move, node = node.select(self.c_puct)
+            action = circuit.gate_Set[move]
+            circuit.insert_gate(action[0], action[1], move) #circuit.copy
             # print("select:", action, node)
-            action = circuit.dict_id2actions[action]
-            circuit.insert_gate(action[0], action[1]) # action代码 转换为 门操作 insert_gate 可识别
+            # action = circuit.dict_id2actions[action]
+            # circuit.insert_gate(action[0], action[1]) # action代码 转换为 门操作 insert_gate 可识别
             # product_HS = circuit.is_target()[1]
             # reward = -1 + (1 / (4 ** CONFIG["n_qubit"])) * product_HS ** 2
             # rewards.append(reward)
@@ -91,6 +93,7 @@ class MCTS(object):
         #如果是叶节点 给出由神经网络提供的 所有可能的动作分布以及对当前环境的评估
         #给出动作的概率 分理出动作：概率
         actions_probs, leaf_value = self.policy_value(circuit) # actions[0.1353, 0.3679, 0.6065, 0.2231,0.1225, 0.4493, 0.2019]] and evaluated q(s+1) of current node
+
         node.expand(actions_probs)
         node.Q = leaf_value
         node.count_visit += 1 #更新节点值访问次数
